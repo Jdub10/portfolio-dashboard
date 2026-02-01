@@ -3,15 +3,51 @@ import pandas as pd
 import yfinance as yf
 import plotly.express as px
 
-# --- 1. 頁面設定 ---
+# --- 1. 頁面設定 (必須放在第一行) ---
 st.set_page_config(page_title="James' Commander Dashboard", layout="wide")
 
 # ==========================================
-# 🔴 Google Sheet CSV 連結
+# 🔐 密碼保護功能
 # ==========================================
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.text_input(
+            "請輸入通關密碼 (Password):", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input again.
+        st.text_input(
+            "密碼錯誤，請重試:", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    else:
+        # Password correct.
+        return True
+
+# 如果密碼檢查沒通過，就停止執行下面的程式
+if not check_password():
+    st.stop()
+
+# ==========================================
+# 🚀 以下是主程式 (密碼通過後才會執行)
+# ==========================================
+
+# 🔴 Google Sheet CSV 連結
 SHEET_URL = "https://docs.google.com/spreadsheets/d/14IGIMj9iR5qOtmYT1e6FgN8t2tdQ5M1R_-hS6rw1RQs/export?format=csv"
 
-# --- 2. 核心函數：讀取與清洗數據 ---
+# --- 核心函數：讀取與清洗數據 ---
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
@@ -117,7 +153,7 @@ def fetch_live_data(df):
     
     return df, fx_rate
 
-# --- 3. 主介面邏輯 ---
+# --- 主介面邏輯 ---
 st.title("🚀 James' Commander Dashboard")
 
 if st.button('🔄 Refresh Data'):
@@ -127,7 +163,6 @@ df_raw = load_and_clean_data()
 
 if not df_raw.empty:
 
-    # 自動讀取本金 (從 Sheet 找 CAPITAL)
     capital_row = df_raw[df_raw['Ticker'] == 'CAPITAL']
     if not capital_row.empty:
         CAPITAL_INJECTED = capital_row['Shares'].sum()
@@ -151,33 +186,43 @@ if not df_raw.empty:
 
     st.markdown("---")
 
-    # 🍰 圓餅圖
+    # 🍰 雙圓餅圖
     col_chart1, col_chart2 = st.columns(2)
-    df_equity = df_updated[df_updated['Ticker'] != 'Cash'] 
     
     with col_chart1:
-        st.subheader("🍰 板塊配置")
-        if 'Sector' in df_equity.columns:
-            fig1 = px.pie(df_equity, values='Market_Value_AUD', names='Sector', hole=0.4)
-            st.plotly_chart(fig1, use_container_width=True)
+        st.subheader("💰 資產配置 (含現金)")
+        df_incl_cash = df_updated.groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
+        df_incl_cash = df_incl_cash.sort_values('Market_Value_AUD', ascending=False)
+        fig1 = px.pie(df_incl_cash, values='Market_Value_AUD', names='Ticker', hole=0.4,
+                      title=f"Total: ${total_net_worth:,.0f}")
+        fig1.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig1, use_container_width=True)
 
     with col_chart2:
-        st.subheader("⚔️ 戰略角色")
-        if 'Strategy Role' in df_equity.columns:
-            fig2 = px.pie(df_equity, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
-                         color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
-            st.plotly_chart(fig2, use_container_width=True)
+        st.subheader("📈 持股分佈 (不含現金)")
+        df_excl_cash = df_updated[df_updated['Ticker'] != 'Cash'].groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
+        df_excl_cash = df_excl_cash.sort_values('Market_Value_AUD', ascending=False)
+        equity_total = df_excl_cash['Market_Value_AUD'].sum()
+        fig2 = px.pie(df_excl_cash, values='Market_Value_AUD', names='Ticker', hole=0.4,
+                      title=f"Equity: ${equity_total:,.0f}")
+        fig2.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig2, use_container_width=True)
 
-    # 跨平台合併
-    ticker_stats = df_updated.groupby('Ticker')[['Market_Value_AUD', 'Target_Weight']].sum().reset_index()
-    ticker_stats.rename(columns={'Market_Value_AUD': 'Total_Ticker_Value', 'Target_Weight': 'Total_Ticker_Target'}, inplace=True)
+    # 跨平台運算
+    ticker_values = df_updated.groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
+    ticker_values.rename(columns={'Market_Value_AUD': 'Total_Ticker_Value'}, inplace=True)
+    
+    ticker_targets = df_updated.groupby('Ticker')['Target_Weight'].max().reset_index()
+    ticker_targets.rename(columns={'Target_Weight': 'Total_Ticker_Target'}, inplace=True)
+
+    ticker_stats = pd.merge(ticker_values, ticker_targets, on='Ticker')
     ticker_stats['Ticker_Allocation_%'] = ticker_stats['Total_Ticker_Value'] / total_net_worth
     ticker_stats['Global_Drift_%'] = ticker_stats['Ticker_Allocation_%'] - ticker_stats['Total_Ticker_Target']
 
     df_final = pd.merge(df_updated, ticker_stats[['Ticker', 'Total_Ticker_Target', 'Global_Drift_%']], on='Ticker', how='left')
     df_final['Actual_%'] = df_final['Market_Value_AUD'] / total_net_worth
 
-    # 檢視切換
+    # 切換檢視
     view_mode = st.radio("顯示模式 (View Mode)", ["合併檢視 (Summary)", "詳細檢視 (Detailed)"], horizontal=True)
 
     if view_mode == "合併檢視 (Summary)":
@@ -186,7 +231,7 @@ if not df_raw.empty:
             'Total_Cost_AUD': 'sum',
             'Market_Value_AUD': 'sum',
             'Unrealized_PnL': 'sum',
-            'Total_Ticker_Target': 'first',
+            'Total_Ticker_Target': 'max',
             'Global_Drift_%': 'first',
             'Current_Price': 'mean'
         }).reset_index()
@@ -197,22 +242,26 @@ if not df_raw.empty:
         display_cols = ['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 'Stop_Loss_Price', 'Dist_to_Stop']
         display_df = df_final[display_cols].copy()
 
-    # --- 🛠️ 修復 Total Row 的崩潰問題 ---
-    # 關鍵：初始化時使用 None 而不是空字串 ''，避免格式化錯誤
+    # 索引優化 (從1開始)
+    display_df = display_df.reset_index(drop=True)
+    display_df.index = display_df.index + 1
+
+    # Total Row (無索引)
     t_row = {col: None for col in display_cols} 
-    
     t_row['Ticker'] = 'TOTAL'
     t_row['Total_Cost_AUD'] = display_df['Total_Cost_AUD'].sum()
     t_row['Market_Value_AUD'] = display_df['Market_Value_AUD'].sum()
     t_row['Unrealized_PnL'] = display_df['Unrealized_PnL'].sum()
     t_row['Actual_%'] = display_df['Actual_%'].sum()
-    # 目標權重加總可能沒意義，但為了不留白先加總
-    t_row['Total_Ticker_Target'] = display_df['Total_Ticker_Target'].sum() if 'Total_Ticker_Target' in display_df.columns else 0
+    unique_targets_sum = ticker_targets['Total_Ticker_Target'].sum()
+    t_row['Total_Ticker_Target'] = unique_targets_sum
     
     total_df = pd.DataFrame([t_row])
-    display_df = pd.concat([display_df, total_df], ignore_index=True)
+    total_df.index = [''] # 空白索引
+    
+    display_df = pd.concat([display_df, total_df])
 
-    # --- 樣式設定 ---
+    # 樣式設定
     def style_dataframe(row):
         styles = [''] * len(row)
         if row['Ticker'] == 'TOTAL':
@@ -228,7 +277,6 @@ if not df_raw.empty:
                 pass
         return styles
 
-    # 定義安全的上色函數
     def color_drift(val):
         if isinstance(val, (int, float)):
             if val > 0.005: return 'color: green; font-weight: bold'
@@ -247,7 +295,6 @@ if not df_raw.empty:
 
     st.subheader(f"📊 {view_mode}")
     
-    # 顯示表格 (使用 na_rep='-' 讓 None 顯示為橫線)
     st.dataframe(
         display_df.style
         .format({
@@ -265,11 +312,9 @@ if not df_raw.empty:
         .apply(style_dataframe, axis=1)
         .applymap(color_pnl, subset=['Unrealized_PnL'])
         .applymap(color_drift, subset=['Global_Drift_%'])
-        # 這裡加了保護，只有當欄位存在時才套用樣式
         .applymap(color_dist, subset=['Dist_to_Stop'] if 'Dist_to_Stop' in display_df.columns else None)
     )
 
-    # 行動建議
     st.markdown("### ⚡ 總司令行動建議")
     action_tickers = ticker_stats[ticker_stats['Global_Drift_%'] < -0.005]
     if not action_tickers.empty:
