@@ -151,6 +151,25 @@ if not df_raw.empty:
 
     st.markdown("---")
 
+    # ==========================================
+    # 🍰 圓餅圖回歸區 (Restored Charts)
+    # ==========================================
+    col_chart1, col_chart2 = st.columns(2)
+    df_equity = df_updated[df_updated['Ticker'] != 'Cash'] # 排除現金看分佈
+    
+    with col_chart1:
+        st.subheader("🍰 板塊配置 (Sector)")
+        if 'Sector' in df_equity.columns:
+            fig1 = px.pie(df_equity, values='Market_Value_AUD', names='Sector', hole=0.4)
+            st.plotly_chart(fig1, use_container_width=True)
+
+    with col_chart2:
+        st.subheader("⚔️ 戰略角色 (Strategy)")
+        if 'Strategy Role' in df_equity.columns:
+            fig2 = px.pie(df_equity, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
+                         color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
+            st.plotly_chart(fig2, use_container_width=True)
+
     # 跨平台合併
     ticker_stats = df_updated.groupby('Ticker')[['Market_Value_AUD', 'Target_Weight']].sum().reset_index()
     ticker_stats.rename(columns={'Market_Value_AUD': 'Total_Ticker_Value', 'Target_Weight': 'Total_Ticker_Target'}, inplace=True)
@@ -192,7 +211,7 @@ if not df_raw.empty:
     total_df = pd.DataFrame([t_row])
     display_df = pd.concat([display_df, total_df], ignore_index=True)
 
-    # --- 安全的樣式設定函數 (修復 Crash 問題) ---
+    # --- 安全的樣式設定函數 (防止 Crash) ---
     def style_dataframe(row):
         styles = [''] * len(row)
         if row['Ticker'] == 'TOTAL':
@@ -208,7 +227,7 @@ if not df_raw.empty:
                 pass
         return styles
 
-    # 定義安全的上色函數 (防止空白值報錯)
+    # 定義安全的上色函數
     def color_drift(val):
         if isinstance(val, (int, float)):
             if val > 0.005: return 'color: green; font-weight: bold'
@@ -222,7 +241,6 @@ if not df_raw.empty:
     
     def color_dist(val):
         if isinstance(val, (int, float)):
-             # 小於 5% 且大於 0 (未觸發但接近)
             if 0 < val < 0.05: return 'color: orange; font-weight: bold'
         return ''
 
