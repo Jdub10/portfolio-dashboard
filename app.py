@@ -151,20 +151,18 @@ if not df_raw.empty:
 
     st.markdown("---")
 
-    # ==========================================
-    # 🍰 圓餅圖回歸區 (Restored Charts)
-    # ==========================================
+    # 🍰 圓餅圖
     col_chart1, col_chart2 = st.columns(2)
-    df_equity = df_updated[df_updated['Ticker'] != 'Cash'] # 排除現金看分佈
+    df_equity = df_updated[df_updated['Ticker'] != 'Cash'] 
     
     with col_chart1:
-        st.subheader("🍰 板塊配置 (Sector)")
+        st.subheader("🍰 板塊配置")
         if 'Sector' in df_equity.columns:
             fig1 = px.pie(df_equity, values='Market_Value_AUD', names='Sector', hole=0.4)
             st.plotly_chart(fig1, use_container_width=True)
 
     with col_chart2:
-        st.subheader("⚔️ 戰略角色 (Strategy)")
+        st.subheader("⚔️ 戰略角色")
         if 'Strategy Role' in df_equity.columns:
             fig2 = px.pie(df_equity, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
                          color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
@@ -199,19 +197,22 @@ if not df_raw.empty:
         display_cols = ['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 'Stop_Loss_Price', 'Dist_to_Stop']
         display_df = df_final[display_cols].copy()
 
-    # TOTAL Row
-    t_row = {col: '' for col in display_cols}
+    # --- 🛠️ 修復 Total Row 的崩潰問題 ---
+    # 關鍵：初始化時使用 None 而不是空字串 ''，避免格式化錯誤
+    t_row = {col: None for col in display_cols} 
+    
     t_row['Ticker'] = 'TOTAL'
     t_row['Total_Cost_AUD'] = display_df['Total_Cost_AUD'].sum()
     t_row['Market_Value_AUD'] = display_df['Market_Value_AUD'].sum()
     t_row['Unrealized_PnL'] = display_df['Unrealized_PnL'].sum()
     t_row['Actual_%'] = display_df['Actual_%'].sum()
+    # 目標權重加總可能沒意義，但為了不留白先加總
     t_row['Total_Ticker_Target'] = display_df['Total_Ticker_Target'].sum() if 'Total_Ticker_Target' in display_df.columns else 0
     
     total_df = pd.DataFrame([t_row])
     display_df = pd.concat([display_df, total_df], ignore_index=True)
 
-    # --- 安全的樣式設定函數 (防止 Crash) ---
+    # --- 樣式設定 ---
     def style_dataframe(row):
         styles = [''] * len(row)
         if row['Ticker'] == 'TOTAL':
@@ -246,6 +247,7 @@ if not df_raw.empty:
 
     st.subheader(f"📊 {view_mode}")
     
+    # 顯示表格 (使用 na_rep='-' 讓 None 顯示為橫線)
     st.dataframe(
         display_df.style
         .format({
@@ -263,6 +265,7 @@ if not df_raw.empty:
         .apply(style_dataframe, axis=1)
         .applymap(color_pnl, subset=['Unrealized_PnL'])
         .applymap(color_drift, subset=['Global_Drift_%'])
+        # 這裡加了保護，只有當欄位存在時才套用樣式
         .applymap(color_dist, subset=['Dist_to_Stop'] if 'Dist_to_Stop' in display_df.columns else None)
     )
 
