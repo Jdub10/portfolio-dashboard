@@ -49,7 +49,6 @@ def fetch_live_data(df):
     if "AUDUSD=X" not in tickers_list:
         tickers_list.append("AUDUSD=X")
     
-    # 下載數據
     try:
         data = yf.download(tickers_list, period="5d", progress=False)
         
@@ -70,7 +69,6 @@ def fetch_live_data(df):
     fx_rate = latest_prices.get('AUDUSD=X', 0.70)
     if pd.isna(fx_rate) or fx_rate == 0: fx_rate = 0.70
 
-    # 計算欄位
     current_prices = []
     market_values_aud = []
     total_costs_aud = [] 
@@ -83,7 +81,6 @@ def fetch_live_data(df):
         shares = row['Shares']
         cost = row['Avg_Cost']
         
-        # 價格與市值計算
         if ticker == 'Cash':
             price = 1.0
             cost_aud_total = shares / fx_rate if currency == 'USD' else shares
@@ -100,7 +97,6 @@ def fetch_live_data(df):
 
         unrealized = mv - cost_aud_total
 
-        # 停損計算
         stop_price = row.get('Stop_Loss_Price', 0)
         if ticker != 'Cash' and stop_price > 0:
             dist = (price - stop_price) / price
@@ -131,16 +127,12 @@ df_raw = load_and_clean_data()
 
 if not df_raw.empty:
 
-    # 🌟 自動讀取本金邏輯 (從 Sheet 裡找 CAPITAL)
+    # 自動讀取本金 (從 Sheet 找 CAPITAL)
     capital_row = df_raw[df_raw['Ticker'] == 'CAPITAL']
-    
     if not capital_row.empty:
-        # 如果有找到，就用 Sheet 裡的數字
         CAPITAL_INJECTED = capital_row['Shares'].sum()
-        # 把它從表格中移除，避免顯示在持股名單
         df_raw = df_raw[df_raw['Ticker'] != 'CAPITAL']
     else:
-        # 沒找到就用預設值 (fallback)
         CAPITAL_INJECTED = 743564 
 
     with st.spinner('連線報價伺服器中...'):
@@ -150,7 +142,6 @@ if not df_raw.empty:
     unrealized_pnl = total_net_worth - CAPITAL_INJECTED
     pnl_pct = (unrealized_pnl / CAPITAL_INJECTED) * 100 if CAPITAL_INJECTED > 0 else 0
 
-    # KPI 顯示
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("總資產 (AUD)", f"${total_net_worth:,.0f}")
     col2.metric("總投入本金", f"${CAPITAL_INJECTED:,.0f}")
@@ -160,7 +151,7 @@ if not df_raw.empty:
 
     st.markdown("---")
 
-    # 跨平台合併運算
+    # 跨平台合併
     ticker_stats = df_updated.groupby('Ticker')[['Market_Value_AUD', 'Target_Weight']].sum().reset_index()
     ticker_stats.rename(columns={'Market_Value_AUD': 'Total_Ticker_Value', 'Target_Weight': 'Total_Ticker_Target'}, inplace=True)
     ticker_stats['Ticker_Allocation_%'] = ticker_stats['Total_Ticker_Value'] / total_net_worth
@@ -169,7 +160,7 @@ if not df_raw.empty:
     df_final = pd.merge(df_updated, ticker_stats[['Ticker', 'Total_Ticker_Target', 'Global_Drift_%']], on='Ticker', how='left')
     df_final['Actual_%'] = df_final['Market_Value_AUD'] / total_net_worth
 
-    # --- 檢視模式切換 ---
+    # 檢視切換
     view_mode = st.radio("顯示模式 (View Mode)", ["合併檢視 (Summary)", "詳細檢視 (Detailed)"], horizontal=True)
 
     if view_mode == "合併檢視 (Summary)":
@@ -189,8 +180,7 @@ if not df_raw.empty:
         display_cols = ['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 'Stop_Loss_Price', 'Dist_to_Stop']
         display_df = df_final[display_cols].copy()
 
-    # --- 製作 TOTAL Row ---
-    total_row = pd.DataFrame(columns=display_cols)
+    # TOTAL Row
     t_row = {col: '' for col in display_cols}
     t_row['Ticker'] = 'TOTAL'
     t_row['Total_Cost_AUD'] = display_df['Total_Cost_AUD'].sum()
@@ -202,7 +192,7 @@ if not df_raw.empty:
     total_df = pd.DataFrame([t_row])
     display_df = pd.concat([display_df, total_df], ignore_index=True)
 
-    # --- 樣式設定 ---
+    # --- 安全的樣式設定函數 (修復 Crash 問題) ---
     def style_dataframe(row):
         styles = [''] * len(row)
         if row['Ticker'] == 'TOTAL':
@@ -218,7 +208,26 @@ if not df_raw.empty:
                 pass
         return styles
 
+    # 定義安全的上色函數 (防止空白值報錯)
+    def color_drift(val):
+        if isinstance(val, (int, float)):
+            if val > 0.005: return 'color: green; font-weight: bold'
+            if val < -0.005: return 'color: red; font-weight: bold'
+        return ''
+
+    def color_pnl(val):
+        if isinstance(val, (int, float)):
+            return 'color: green' if val > 0 else 'color: red'
+        return ''
+    
+    def color_dist(val):
+        if isinstance(val, (int, float)):
+             # 小於 5% 且大於 0 (未觸發但接近)
+            if 0 < val < 0.05: return 'color: orange; font-weight: bold'
+        return ''
+
     st.subheader(f"📊 {view_mode}")
+    
     st.dataframe(
         display_df.style
         .format({
@@ -234,11 +243,12 @@ if not df_raw.empty:
             'Dist_to_Stop': "{:.1%}"
         }, na_rep="-")
         .apply(style_dataframe, axis=1)
-        .applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Unrealized_PnL'])
-        .applymap(lambda x: 'color: green; font-weight: bold' if x > 0.005 else 'color: red; font-weight: bold' if x < -0.005 else '', subset=['Global_Drift_%'])
+        .applymap(color_pnl, subset=['Unrealized_PnL'])
+        .applymap(color_drift, subset=['Global_Drift_%'])
+        .applymap(color_dist, subset=['Dist_to_Stop'] if 'Dist_to_Stop' in display_df.columns else None)
     )
 
-    # --- 行動建議 ---
+    # 行動建議
     st.markdown("### ⚡ 總司令行動建議")
     action_tickers = ticker_stats[ticker_stats['Global_Drift_%'] < -0.005]
     if not action_tickers.empty:
