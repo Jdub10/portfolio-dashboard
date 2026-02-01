@@ -4,7 +4,7 @@ import yfinance as yf
 import plotly.express as px
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="James' Portfolio Dashboard", layout="wide")
+st.set_page_config(page_title="James' Commander Dashboard", layout="wide")
 
 # ==========================================
 # 🔴 Google Sheet CSV 連結
@@ -12,81 +12,68 @@ st.set_page_config(page_title="James' Portfolio Dashboard", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/14IGIMj9iR5qOtmYT1e6FgN8t2tdQ5M1R_-hS6rw1RQs/export?format=csv"
 
 # --- 2. 核心函數：讀取與清洗數據 ---
-@st.cache_data(ttl=60) # 每60秒刷新一次快取
+@st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
-        # 讀取 Google Sheet CSV
         df = pd.read_csv(SHEET_URL)
-        
-        # 清洗欄位名稱 (去除前後空白)
         df.columns = df.columns.str.strip()
         
-        # 確保必要欄位存在
         required_cols = ['Shares', 'Avg_Cost', 'Target_Weight']
         for col in required_cols:
             if col not in df.columns:
-                st.error(f"❌ 資料表缺少欄位: {col}，請檢查 Google Sheet 標題列。")
+                st.error(f"❌ 資料表缺少欄位: {col}")
                 return pd.DataFrame()
 
-        # 清洗數字欄位 (去除逗號, 轉換型別)
         cols_to_clean = ['Shares', 'Avg_Cost', 'Stop_Loss_Price']
         for col in cols_to_clean:
             if col in df.columns:
-                # 轉成字串 -> 去除逗號 -> 轉回數字
                 df[col] = df[col].astype(str).str.replace(',', '', regex=True)
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        # 清洗 Target_Weight (處理 % 符號)
         if df['Target_Weight'].dtype == object:
              df['Target_Weight'] = df['Target_Weight'].astype(str).str.replace('%', '', regex=True)
              df['Target_Weight'] = pd.to_numeric(df['Target_Weight'], errors='coerce')
         
-        # 如果數字大於 1 (例如填了 18.9 代表 18.9%)，自動除以 100
+        # 自動修正百分比 (若填 18.9 轉為 0.189)
         mask = df['Target_Weight'] > 1.0
         df.loc[mask, 'Target_Weight'] = df.loc[mask, 'Target_Weight'] / 100
         
         return df
     except Exception as e:
-        st.error(f"❌ 無法讀取資料，請檢查連結是否正確。錯誤訊息: {e}")
+        st.error(f"❌ 無法讀取資料: {e}")
         return pd.DataFrame()
 
 def fetch_live_data(df):
-    # 1. 取得股票代號 (排除 Cash)
     tickers_list = df[df['Ticker'] != 'Cash']['Ticker'].unique().tolist()
-    
-    # 2. 清理代號 (移除空白)
     tickers_list = [t.strip() for t in tickers_list]
     
-    # 3. 加入匯率
     if "AUDUSD=X" not in tickers_list:
         tickers_list.append("AUDUSD=X")
     
-    # st.write(f"正在抓取以下代號: {tickers_list}") # 除錯訊息 (可註解掉)
-
-    # 4. 下載數據 (使用 5d 以解決週末問題)
+    # 下載數據 (使用 5d + ffill 解決週末空值)
     try:
-        data = yf.download(tickers_list, period="5d", group_by='ticker', auto_adjust=True)
+        data = yf.download(tickers_list, period="5d", progress=False)
         
-        # 處理資料結構 (Yahoo 回傳格式有時會變)
-        if len(tickers_list) == 1:
-            latest_prices = data['Close'].iloc[-1]
+        if data.empty:
+            st.error("❌ Yahoo Finance 回傳空資料！")
+            latest_prices = pd.Series()
         else:
-            try:
-                # 嘗試取得多層索引的 Close
-                latest_prices = data.xs('Close', level=1, axis=1).iloc[-1]
-            except:
-                # 舊版相容或單層結構
-                latest_prices = data['Close'].iloc[-1]
+            if 'Close' in data.columns:
+                close_data = data['Close']
+                # 🚨 關鍵：填補空值並取最後一筆
+                latest_prices = close_data.ffill().iloc[-1]
+            else:
+                latest_prices = data.iloc[-1]
                 
     except Exception as e:
         st.error(f"Yahoo Finance 下載失敗: {e}")
         latest_prices = pd.Series()
 
-    # 5. 取得匯率
+    # 取得匯率
     fx_rate = latest_prices.get('AUDUSD=X', 0.70)
-    if pd.isna(fx_rate): fx_rate = 0.70
+    if pd.isna(fx_rate) or fx_rate == 0: fx_rate = 0.70
 
-    # 6. 填入數據
+    # 計算個別市值
     current_prices = []
     market_values_aud = []
     dist_to_stop = []
@@ -97,22 +84,20 @@ def fetch_live_data(df):
         shares = row['Shares']
         cost = row['Avg_Cost']
         
-        # --- A. 處理價格 ---
+        # 價格處理
         if ticker == 'Cash':
             price = 1.0
             mv = shares / fx_rate if currency == 'USD' else shares
         else:
-            # 嘗試從下載的數據中找價格
             try:
                 price = latest_prices.get(ticker)
                 if pd.isna(price): price = cost
             except:
                 price = cost
             
-            # 市值換算
             mv = (price * shares) / fx_rate if currency == 'USD' else price * shares
 
-        # --- B. 計算停損 ---
+        # 停損距離
         stop_price = row.get('Stop_Loss_Price', 0)
         if ticker != 'Cash' and stop_price > 0:
             dist = (price - stop_price) / price
@@ -141,61 +126,64 @@ if not df_raw.empty:
     with st.spinner('連線報價伺服器中...'):
         df_updated, fx_rate = fetch_live_data(df_raw)
 
-    # --- 總資產計算 ---
     total_net_worth = df_updated['Market_Value_AUD'].sum()
-    
-    # 這裡可以手動輸入您的總入金 (Capital Injected)
     CAPITAL_INJECTED = 743564 
-    
     unrealized_pnl = total_net_worth - CAPITAL_INJECTED
     pnl_pct = (unrealized_pnl / CAPITAL_INJECTED) * 100
 
-    # --- 頂層 KPI ---
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("總資產 (AUD)", f"${total_net_worth:,.0f}")
     col2.metric("總投入本金", f"${CAPITAL_INJECTED:,.0f}")
     col3.metric("未實現損益", f"${unrealized_pnl:,.0f}", f"{pnl_pct:.2f}%", 
                 delta_color="normal" if unrealized_pnl > 0 else "inverse")
-    col4.metric("即時匯率 (AUD/USD)", f"{fx_rate:.4f}")
+    col4.metric("即時匯率", f"{fx_rate:.4f}")
 
     st.markdown("---")
 
-    # --- 圖表分析區 ---
     col_chart1, col_chart2 = st.columns(2)
-    df_equity = df_updated[df_updated['Ticker'] != 'Cash'] # 排除現金看分佈
+    df_equity = df_updated[df_updated['Ticker'] != 'Cash']
     
     with col_chart1:
-        st.subheader("🍰 板塊配置 (Sector)")
+        st.subheader("🍰 板塊配置")
         if 'Sector' in df_equity.columns:
             fig1 = px.pie(df_equity, values='Market_Value_AUD', names='Sector', hole=0.4)
             st.plotly_chart(fig1, use_container_width=True)
 
     with col_chart2:
-        st.subheader("⚔️ 戰略角色 (Strategy)")
+        st.subheader("⚔️ 戰略角色")
         if 'Strategy Role' in df_equity.columns:
             fig2 = px.pie(df_equity, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
                          color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
             st.plotly_chart(fig2, use_container_width=True)
 
-    # --- 持股明細與 Drift ---
-    st.subheader("📊 持股監控與再平衡")
+    # ==========================================
+    # 🌟 關鍵修改：合併計算 Drift (Consolidated View)
+    # ==========================================
+    st.subheader("📊 持股監控 (跨平台合併計算)")
 
-    # 計算 Drift
-    df_updated['Portfolio %'] = df_updated['Market_Value_AUD'] / total_net_worth
-    df_updated['Drift %'] = df_updated['Portfolio %'] - df_updated['Target_Weight']
+    # 1. 先依 Ticker 分組，計算該股票的「總市值」與「總目標」
+    ticker_stats = df_updated.groupby('Ticker')[['Market_Value_AUD', 'Target_Weight']].sum().reset_index()
+    ticker_stats.rename(columns={
+        'Market_Value_AUD': 'Total_Ticker_Value',
+        'Target_Weight': 'Total_Ticker_Target' # 這裡會把 0% 和 8% 加總變成 8%
+    }, inplace=True)
 
-    # 選擇要顯示的欄位
-    cols_to_show = ['Ticker', 'Platform', 'Sector', 'Strategy Role', 'Shares', 'Avg_Cost', 'Current_Price', 'Stop_Loss_Price', 'Dist_to_Stop', 'Market_Value_AUD', 'Target_Weight', 'Drift %']
-    display_cols = [c for c in cols_to_show if c in df_updated.columns]
-    
-    display_df = df_updated[display_cols].copy()
+    # 2. 計算全域 Drift
+    ticker_stats['Ticker_Allocation_%'] = ticker_stats['Total_Ticker_Value'] / total_net_worth
+    ticker_stats['Global_Drift_%'] = ticker_stats['Ticker_Allocation_%'] - ticker_stats['Total_Ticker_Target']
 
-    # 樣式函數
+    # 3. 將計算結果合併回原始表格 (讓每一行都知道自己的總目標是多少)
+    df_final = pd.merge(df_updated, ticker_stats[['Ticker', 'Total_Ticker_Target', 'Global_Drift_%']], on='Ticker', how='left')
+
+    # 準備顯示
+    cols_to_show = ['Ticker', 'Platform', 'Sector', 'Shares', 'Avg_Cost', 'Current_Price', 'Market_Value_AUD', 'Total_Ticker_Target', 'Global_Drift_%']
+    display_df = df_final[cols_to_show].copy()
+
+    # 樣式設定
     def style_rows(row):
-        # 停損紅色警報
-        if row['Ticker'] != 'Cash' and row.get('Stop_Loss_Price', 0) > 0:
-            if row['Current_Price'] < row['Stop_Loss_Price']:
-                return ['background-color: #ffcccc; color: black'] * len(row)
+        # 停損紅燈
+        if row['Ticker'] != 'Cash' and row.get('Stop_Loss_Price', 0) > 0: # 需注意 merge 後可能遺失 Stop Loss，若有保留則繼續用
+            pass 
         return [''] * len(row)
 
     st.dataframe(
@@ -204,26 +192,25 @@ if not df_raw.empty:
             'Market_Value_AUD': "${:,.0f}",
             'Avg_Cost': "{:,.2f}",
             'Current_Price': "{:,.2f}",
-            'Stop_Loss_Price': "{:,.2f}",
-            'Dist_to_Stop': "{:.1%}",
-            'Target_Weight': "{:.1%}",
-            'Drift %': "{:.2%}"
+            'Total_Ticker_Target': "{:.1%}",   # 顯示合併後的目標 (8.0%)
+            'Global_Drift_%': "{:.2%}"        # 顯示合併後的 Drift
         })
-        .apply(style_rows, axis=1)
-        .applymap(lambda x: 'color: green; font-weight: bold' if x > 0.005 else 'color: red; font-weight: bold' if x < -0.005 else '', subset=['Drift %'])
+        .applymap(lambda x: 'color: green; font-weight: bold' if x > 0.005 else 'color: red; font-weight: bold' if x < -0.005 else '', subset=['Global_Drift_%'])
     )
 
-    # --- 戰略行動建議 ---
-    st.markdown("### ⚡ 總司令行動建議 (Action Plan)")
+    # --- 戰略建議 (使用合併後的 Drift) ---
+    st.markdown("### ⚡ 總司令行動建議")
     
-    # 找出 Drift < -0.5% 的項目 (需要買進)
-    buy_list = df_updated[(df_updated['Drift %'] < -0.005) & (df_updated['Target_Weight'] > 0)]
+    # 針對 Ticker 給建議，而不是針對 Row (避免重複建議)
+    # 篩選出需要買進的 Ticker (Drift < -0.5%)
+    action_tickers = ticker_stats[ticker_stats['Global_Drift_%'] < -0.005]
     
-    if not buy_list.empty:
-        for _, row in buy_list.iterrows():
-            shortfall = abs(row['Drift %']) * total_net_worth
-            st.info(f"🟢 **買進訊號 ({row['Ticker']})**: 低於目標 {abs(row['Drift %']):.1%}。建議加碼約 **${shortfall:,.0f} AUD**。")
+    if not action_tickers.empty:
+        for _, row in action_tickers.iterrows():
+            shortfall = abs(row['Global_Drift_%']) * total_net_worth
+            st.info(f"🟢 **加碼訊號 ({row['Ticker']})**: 整體部位低於目標 {abs(row['Global_Drift_%']):.1%}。建議總共加碼 **${shortfall:,.0f} AUD**。")
     else:
-        st.success("✅ 目前投資組合平衡完美，無須重大操作。")
+        st.success("✅ 投資組合平衡完美 (Based on Consolidated View)")
+
 else:
-    st.info("⏳ 等待數據中... 請確認 Google Sheet 連結正確。")
+    st.info("⏳ 等待數據中...")
