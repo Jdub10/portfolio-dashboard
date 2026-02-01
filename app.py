@@ -60,7 +60,7 @@ def fetch_live_data(df):
     
     # 下載數據
     if tickers:
-        data = yf.download(tickers, period="1d")['Close']
+        data = yf.download(tickers, period="1d", progress=False)['Close']
         if isinstance(data, pd.Series): 
             data = data.to_frame().T
         latest_prices = data.iloc[-1]
@@ -220,4 +220,5 @@ if not df_raw.empty:
     else:
         st.success("✅ 目前投資組合平衡完美，無須重大操作。")
 else:
+
     st.info("⏳ 等待數據中... 請確認 Google Sheet 連結正確。")
