@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="James' Commander Dashboard", layout="wide")
 
 # ==========================================
-# 🔴 Google Sheet CSV 連結 (已填入您提供的連結)
+# 🔴 Google Sheet CSV 連結
 # ==========================================
 SHEET_URL = "https://docs.google.com/spreadsheets/d/14IGIMj9iR5qOtmYT1e6FgN8t2tdQ5M1R_-hS6rw1RQs/export?format=csv"
 
@@ -73,8 +73,8 @@ def fetch_live_data(df):
     # 計算欄位
     current_prices = []
     market_values_aud = []
-    total_costs_aud = [] # 新增：總成本
-    pnl_aud = []         # 新增：損益
+    total_costs_aud = [] 
+    pnl_aud = []        
     dist_to_stop = []
 
     for _, row in df.iterrows():
@@ -86,7 +86,7 @@ def fetch_live_data(df):
         # 1. 價格處理
         if ticker == 'Cash':
             price = 1.0
-            # 現金的成本 = 現金本身 (假設無匯差損益)
+            # 現金成本 = 現金本身 (換算回 AUD)
             cost_aud_total = shares / fx_rate if currency == 'USD' else shares
             mv = cost_aud_total
         else:
@@ -110,7 +110,7 @@ def fetch_live_data(df):
         if ticker != 'Cash' and stop_price > 0:
             dist = (price - stop_price) / price
         else:
-            dist = 1.0 # 安全值
+            dist = 1.0
 
         current_prices.append(price)
         market_values_aud.append(mv)
@@ -140,11 +140,15 @@ if not df_raw.empty:
 
     total_net_worth = df_updated['Market_Value_AUD'].sum()
     
-    # 手動輸入總本金 (為了最上方 KPI 顯示)
-    CAPITAL_INJECTED = 743564 
+    # ==========================================
+    # 🔴 請在這裡修改您的真實總本金
+    # ==========================================
+    CAPITAL_INJECTED = 743564  # <--- 修改這個數字
+    
     unrealized_pnl = total_net_worth - CAPITAL_INJECTED
     pnl_pct = (unrealized_pnl / CAPITAL_INJECTED) * 100
 
+    # KPI 顯示
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("總資產 (AUD)", f"${total_net_worth:,.0f}")
     col2.metric("總投入本金", f"${CAPITAL_INJECTED:,.0f}")
@@ -154,65 +158,82 @@ if not df_raw.empty:
 
     st.markdown("---")
 
-    # --- 合併計算 (Consolidated View) ---
+    # 跨平台合併運算
     ticker_stats = df_updated.groupby('Ticker')[['Market_Value_AUD', 'Target_Weight']].sum().reset_index()
-    ticker_stats.rename(columns={
-        'Market_Value_AUD': 'Total_Ticker_Value',
-        'Target_Weight': 'Total_Ticker_Target'
-    }, inplace=True)
-
+    ticker_stats.rename(columns={'Market_Value_AUD': 'Total_Ticker_Value', 'Target_Weight': 'Total_Ticker_Target'}, inplace=True)
     ticker_stats['Ticker_Allocation_%'] = ticker_stats['Total_Ticker_Value'] / total_net_worth
     ticker_stats['Global_Drift_%'] = ticker_stats['Ticker_Allocation_%'] - ticker_stats['Total_Ticker_Target']
 
+    # 合併回原始資料
     df_final = pd.merge(df_updated, ticker_stats[['Ticker', 'Total_Ticker_Target', 'Global_Drift_%']], on='Ticker', how='left')
-
-    # 計算 Actual % (個別持倉佔比)
     df_final['Actual_%'] = df_final['Market_Value_AUD'] / total_net_worth
 
-    # --- 準備顯示表格 (加入新欄位) ---
-    st.subheader("📊 詳細持股損益表")
+    # --- 🔘 檢視模式切換開關 ---
+    view_mode = st.radio("顯示模式 (View Mode)", ["合併檢視 (Summary)", "詳細檢視 (Detailed)"], horizontal=True)
 
-    cols_to_show = [
-        'Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 
-        'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 
-        'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 
-        'Stop_Loss_Price', 'Dist_to_Stop'
-    ]
-    
-    display_df = df_final[cols_to_show].copy()
+    if view_mode == "合併檢視 (Summary)":
+        # 製作合併表
+        summary_df = df_final.groupby('Ticker').agg({
+            'Shares': 'sum',
+            'Total_Cost_AUD': 'sum',
+            'Market_Value_AUD': 'sum',
+            'Unrealized_PnL': 'sum',
+            'Total_Ticker_Target': 'first', # 目標是一樣的，取第一個
+            'Global_Drift_%': 'first',      # Drift 是一樣的
+            'Current_Price': 'mean'         # 價格取平均 (其實都一樣)
+        }).reset_index()
+        
+        # 計算合併後的權重
+        summary_df['Actual_%'] = summary_df['Market_Value_AUD'] / total_net_worth
+        
+        # 選擇顯示欄位
+        display_cols = ['Ticker', 'Shares', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%']
+        display_df = summary_df[display_cols].copy()
+        
+    else:
+        # 詳細檢視 (保留 Platform 等欄位)
+        display_cols = ['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 'Stop_Loss_Price', 'Dist_to_Stop']
+        display_df = df_final[display_cols].copy()
 
     # --- 製作 TOTAL Row (總計行) ---
-    total_row = pd.DataFrame(columns=cols_to_show)
-    total_row.loc[0] = [
-        'TOTAL', '', 0, 0, 0, 
-        display_df['Total_Cost_AUD'].sum(), 
-        display_df['Market_Value_AUD'].sum(), 
-        display_df['Unrealized_PnL'].sum(), 
-        display_df['Actual_%'].sum(), 
-        display_df['Total_Ticker_Target'].sum(), # 這裡加總目標權重
-        0, 0, 0
-    ]
+    total_row = pd.DataFrame(columns=display_cols)
+    # 建立一個全空的 row
+    t_row = {col: '' for col in display_cols}
     
-    # 將總計行合併到最後
-    display_df = pd.concat([display_df, total_row], ignore_index=True)
+    # 填入加總數值
+    t_row['Ticker'] = 'TOTAL'
+    t_row['Total_Cost_AUD'] = display_df['Total_Cost_AUD'].sum()
+    t_row['Market_Value_AUD'] = display_df['Market_Value_AUD'].sum()
+    t_row['Unrealized_PnL'] = display_df['Unrealized_PnL'].sum()
+    t_row['Actual_%'] = display_df['Actual_%'].sum()
+    t_row['Total_Ticker_Target'] = display_df['Total_Ticker_Target'].sum() if 'Total_Ticker_Target' in display_df.columns else 0
+    
+    # 轉成 DataFrame 並合併
+    total_df = pd.DataFrame([t_row])
+    display_df = pd.concat([display_df, total_df], ignore_index=True)
 
-    # --- 樣式設定函數 ---
+    # --- 樣式設定 ---
     def style_dataframe(row):
         styles = [''] * len(row)
         
-        # 1. 停損紅色警報 (排除 Total 行)
-        if row['Ticker'] != 'TOTAL' and row['Ticker'] != 'Cash' and row.get('Stop_Loss_Price', 0) > 0:
-            if row['Current_Price'] < row['Stop_Loss_Price']:
-                # 找到整行的索引，全部標紅
-                return ['background-color: #ffcccc; color: black'] * len(row)
-        
-        # 2. Total 行加粗
+        # Total 行加粗
         if row['Ticker'] == 'TOTAL':
             return ['font-weight: bold; background-color: #f0f2f6'] * len(row)
+        
+        # 停損紅色警報 (只在詳細模式顯示，且不是 Cash)
+        if 'Stop_Loss_Price' in row and row['Ticker'] != 'Cash' and row['Ticker'] != 'TOTAL':
+            try:
+                stop = float(row['Stop_Loss_Price'])
+                curr = float(row['Current_Price'])
+                if stop > 0 and curr < stop:
+                    return ['background-color: #ffcccc; color: black'] * len(row)
+            except:
+                pass
             
         return styles
 
-    # --- 渲染表格 ---
+    st.subheader(f"📊 {view_mode}")
+    
     st.dataframe(
         display_df.style
         .format({
@@ -226,17 +247,13 @@ if not df_raw.empty:
             'Global_Drift_%': "{:.2%}",
             'Stop_Loss_Price': "{:,.2f}",
             'Dist_to_Stop': "{:.1%}"
-        })
+        }, na_rep="-")
         .apply(style_dataframe, axis=1)
-        # 損益顏色 (綠漲紅跌)
         .applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Unrealized_PnL'])
-        # Drift 顏色
         .applymap(lambda x: 'color: green; font-weight: bold' if x > 0.005 else 'color: red; font-weight: bold' if x < -0.005 else '', subset=['Global_Drift_%'])
-        # 停損距離顏色 (小於 5% 變橘色警示)
-        .applymap(lambda x: 'color: orange; font-weight: bold' if 0 < x < 0.05 else '', subset=['Dist_to_Stop'])
     )
 
-    # --- 戰略建議 ---
+    # --- 戰略建議 (永遠基於合併後的 Drift) ---
     st.markdown("### ⚡ 總司令行動建議")
     action_tickers = ticker_stats[ticker_stats['Global_Drift_%'] < -0.005]
     
