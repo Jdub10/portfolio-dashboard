@@ -49,7 +49,7 @@ def fetch_live_data(df):
     if "AUDUSD=X" not in tickers_list:
         tickers_list.append("AUDUSD=X")
     
-    # 下載數據 (使用 5d + ffill 解決週末空值)
+    # 下載數據
     try:
         data = yf.download(tickers_list, period="5d", progress=False)
         
@@ -83,10 +83,9 @@ def fetch_live_data(df):
         shares = row['Shares']
         cost = row['Avg_Cost']
         
-        # 1. 價格處理
+        # 價格與市值計算
         if ticker == 'Cash':
             price = 1.0
-            # 現金成本 = 現金本身 (換算回 AUD)
             cost_aud_total = shares / fx_rate if currency == 'USD' else shares
             mv = cost_aud_total
         else:
@@ -96,16 +95,12 @@ def fetch_live_data(df):
             except:
                 price = cost
             
-            # 市值換算
             mv = (price * shares) / fx_rate if currency == 'USD' else price * shares
-            
-            # 成本換算 (計算總成本 AUD)
             cost_aud_total = (cost * shares) / fx_rate if currency == 'USD' else (cost * shares)
 
-        # 2. 損益計算
         unrealized = mv - cost_aud_total
 
-        # 3. 停損距離
+        # 停損計算
         stop_price = row.get('Stop_Loss_Price', 0)
         if ticker != 'Cash' and stop_price > 0:
             dist = (price - stop_price) / price
@@ -135,18 +130,25 @@ if st.button('🔄 Refresh Data'):
 df_raw = load_and_clean_data()
 
 if not df_raw.empty:
+
+    # 🌟 自動讀取本金邏輯 (從 Sheet 裡找 CAPITAL)
+    capital_row = df_raw[df_raw['Ticker'] == 'CAPITAL']
+    
+    if not capital_row.empty:
+        # 如果有找到，就用 Sheet 裡的數字
+        CAPITAL_INJECTED = capital_row['Shares'].sum()
+        # 把它從表格中移除，避免顯示在持股名單
+        df_raw = df_raw[df_raw['Ticker'] != 'CAPITAL']
+    else:
+        # 沒找到就用預設值 (fallback)
+        CAPITAL_INJECTED = 743564 
+
     with st.spinner('連線報價伺服器中...'):
         df_updated, fx_rate = fetch_live_data(df_raw)
 
     total_net_worth = df_updated['Market_Value_AUD'].sum()
-    
-    # ==========================================
-    # 🔴 請在這裡修改您的真實總本金
-    # ==========================================
-    CAPITAL_INJECTED = 743564  # <--- 修改這個數字
-    
     unrealized_pnl = total_net_worth - CAPITAL_INJECTED
-    pnl_pct = (unrealized_pnl / CAPITAL_INJECTED) * 100
+    pnl_pct = (unrealized_pnl / CAPITAL_INJECTED) * 100 if CAPITAL_INJECTED > 0 else 0
 
     # KPI 顯示
     col1, col2, col3, col4 = st.columns(4)
@@ -164,43 +166,32 @@ if not df_raw.empty:
     ticker_stats['Ticker_Allocation_%'] = ticker_stats['Total_Ticker_Value'] / total_net_worth
     ticker_stats['Global_Drift_%'] = ticker_stats['Ticker_Allocation_%'] - ticker_stats['Total_Ticker_Target']
 
-    # 合併回原始資料
     df_final = pd.merge(df_updated, ticker_stats[['Ticker', 'Total_Ticker_Target', 'Global_Drift_%']], on='Ticker', how='left')
     df_final['Actual_%'] = df_final['Market_Value_AUD'] / total_net_worth
 
-    # --- 🔘 檢視模式切換開關 ---
+    # --- 檢視模式切換 ---
     view_mode = st.radio("顯示模式 (View Mode)", ["合併檢視 (Summary)", "詳細檢視 (Detailed)"], horizontal=True)
 
     if view_mode == "合併檢視 (Summary)":
-        # 製作合併表
         summary_df = df_final.groupby('Ticker').agg({
             'Shares': 'sum',
             'Total_Cost_AUD': 'sum',
             'Market_Value_AUD': 'sum',
             'Unrealized_PnL': 'sum',
-            'Total_Ticker_Target': 'first', # 目標是一樣的，取第一個
-            'Global_Drift_%': 'first',      # Drift 是一樣的
-            'Current_Price': 'mean'         # 價格取平均 (其實都一樣)
+            'Total_Ticker_Target': 'first',
+            'Global_Drift_%': 'first',
+            'Current_Price': 'mean'
         }).reset_index()
-        
-        # 計算合併後的權重
         summary_df['Actual_%'] = summary_df['Market_Value_AUD'] / total_net_worth
-        
-        # 選擇顯示欄位
         display_cols = ['Ticker', 'Shares', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%']
         display_df = summary_df[display_cols].copy()
-        
     else:
-        # 詳細檢視 (保留 Platform 等欄位)
         display_cols = ['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 'Stop_Loss_Price', 'Dist_to_Stop']
         display_df = df_final[display_cols].copy()
 
-    # --- 製作 TOTAL Row (總計行) ---
+    # --- 製作 TOTAL Row ---
     total_row = pd.DataFrame(columns=display_cols)
-    # 建立一個全空的 row
     t_row = {col: '' for col in display_cols}
-    
-    # 填入加總數值
     t_row['Ticker'] = 'TOTAL'
     t_row['Total_Cost_AUD'] = display_df['Total_Cost_AUD'].sum()
     t_row['Market_Value_AUD'] = display_df['Market_Value_AUD'].sum()
@@ -208,19 +199,15 @@ if not df_raw.empty:
     t_row['Actual_%'] = display_df['Actual_%'].sum()
     t_row['Total_Ticker_Target'] = display_df['Total_Ticker_Target'].sum() if 'Total_Ticker_Target' in display_df.columns else 0
     
-    # 轉成 DataFrame 並合併
     total_df = pd.DataFrame([t_row])
     display_df = pd.concat([display_df, total_df], ignore_index=True)
 
     # --- 樣式設定 ---
     def style_dataframe(row):
         styles = [''] * len(row)
-        
-        # Total 行加粗
         if row['Ticker'] == 'TOTAL':
             return ['font-weight: bold; background-color: #f0f2f6'] * len(row)
         
-        # 停損紅色警報 (只在詳細模式顯示，且不是 Cash)
         if 'Stop_Loss_Price' in row and row['Ticker'] != 'Cash' and row['Ticker'] != 'TOTAL':
             try:
                 stop = float(row['Stop_Loss_Price'])
@@ -229,11 +216,9 @@ if not df_raw.empty:
                     return ['background-color: #ffcccc; color: black'] * len(row)
             except:
                 pass
-            
         return styles
 
     st.subheader(f"📊 {view_mode}")
-    
     st.dataframe(
         display_df.style
         .format({
@@ -253,10 +238,9 @@ if not df_raw.empty:
         .applymap(lambda x: 'color: green; font-weight: bold' if x > 0.005 else 'color: red; font-weight: bold' if x < -0.005 else '', subset=['Global_Drift_%'])
     )
 
-    # --- 戰略建議 (永遠基於合併後的 Drift) ---
+    # --- 行動建議 ---
     st.markdown("### ⚡ 總司令行動建議")
     action_tickers = ticker_stats[ticker_stats['Global_Drift_%'] < -0.005]
-    
     if not action_tickers.empty:
         for _, row in action_tickers.iterrows():
             shortfall = abs(row['Global_Drift_%']) * total_net_worth
