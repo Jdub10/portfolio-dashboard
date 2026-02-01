@@ -21,33 +21,27 @@ def check_password():
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password.
         st.text_input(
             "請輸入通關密碼 (Password):", type="password", on_change=password_entered, key="password"
         )
         return False
     elif not st.session_state["password_correct"]:
-        # Password incorrect, show input again.
         st.text_input(
             "密碼錯誤，請重試:", type="password", on_change=password_entered, key="password"
         )
         return False
     else:
-        # Password correct.
         return True
 
-# 如果密碼檢查沒通過，就停止執行下面的程式
 if not check_password():
     st.stop()
 
 # ==========================================
-# 🚀 以下是主程式 (密碼通過後才會執行)
+# 🚀 主程式開始
 # ==========================================
 
-# 🔴 Google Sheet CSV 連結
 SHEET_URL = "https://docs.google.com/spreadsheets/d/14IGIMj9iR5qOtmYT1e6FgN8t2tdQ5M1R_-hS6rw1RQs/export?format=csv"
 
-# --- 核心函數：讀取與清洗數據 ---
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
@@ -153,7 +147,43 @@ def fetch_live_data(df):
     
     return df, fx_rate
 
-# --- 主介面邏輯 ---
+# --- 🛠️ 圓餅圖優化函數 ---
+def group_small_holdings(df, value_col='Market_Value_AUD', name_col='Ticker', threshold=0.80):
+    df = df.sort_values(value_col, ascending=False)
+    total_val = df[value_col].sum()
+    
+    if total_val == 0:
+        return df
+
+    main_rows = []
+    other_rows = []
+    current_val = 0
+    
+    for _, row in df.iterrows():
+        if current_val / total_val < threshold:
+            main_rows.append(row)
+            current_val += row[value_col]
+        else:
+            other_rows.append(row)
+            
+    df_main = pd.DataFrame(main_rows)
+    
+    if other_rows:
+        others_val = sum(r[value_col] for r in other_rows)
+        others_names = [r[name_col] for r in other_rows]
+        if len(others_names) > 3:
+            names_str = ", ".join(others_names[:3]) + " etc"
+        else:
+            names_str = ", ".join(others_names)
+        label = f"Others ({names_str})"
+        new_row = {name_col: label, value_col: others_val}
+        df_others = pd.DataFrame([new_row])
+        df_final = pd.concat([df_main, df_others], ignore_index=True)
+        return df_final
+    else:
+        return df_main
+
+# --- 主介面 ---
 st.title("🚀 James' Commander Dashboard")
 
 if st.button('🔄 Refresh Data'):
@@ -186,14 +216,16 @@ if not df_raw.empty:
 
     st.markdown("---")
 
-    # 🍰 雙圓餅圖
+    # ==========================================
+    # 📊 第一排圖表：資金分佈
+    # ==========================================
     col_chart1, col_chart2 = st.columns(2)
     
     with col_chart1:
         st.subheader("💰 資產配置 (含現金)")
         df_incl_cash = df_updated.groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
-        df_incl_cash = df_incl_cash.sort_values('Market_Value_AUD', ascending=False)
-        fig1 = px.pie(df_incl_cash, values='Market_Value_AUD', names='Ticker', hole=0.4,
+        df_incl_cash_optimized = group_small_holdings(df_incl_cash, threshold=0.80)
+        fig1 = px.pie(df_incl_cash_optimized, values='Market_Value_AUD', names='Ticker', hole=0.4,
                       title=f"Total: ${total_net_worth:,.0f}")
         fig1.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig1, use_container_width=True)
@@ -201,12 +233,35 @@ if not df_raw.empty:
     with col_chart2:
         st.subheader("📈 持股分佈 (不含現金)")
         df_excl_cash = df_updated[df_updated['Ticker'] != 'Cash'].groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
-        df_excl_cash = df_excl_cash.sort_values('Market_Value_AUD', ascending=False)
+        df_excl_cash_optimized = group_small_holdings(df_excl_cash, threshold=0.80)
         equity_total = df_excl_cash['Market_Value_AUD'].sum()
-        fig2 = px.pie(df_excl_cash, values='Market_Value_AUD', names='Ticker', hole=0.4,
+        fig2 = px.pie(df_excl_cash_optimized, values='Market_Value_AUD', names='Ticker', hole=0.4,
                       title=f"Equity: ${equity_total:,.0f}")
         fig2.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig2, use_container_width=True)
+
+    # ==========================================
+    # 📊 第二排圖表：戰略配置
+    # ==========================================
+    col_chart3, col_chart4 = st.columns(2)
+    df_equity = df_updated[df_updated['Ticker'] != 'Cash'] 
+    
+    with col_chart3:
+        st.subheader("🍰 板塊配置 (Sector)")
+        if 'Sector' in df_equity.columns:
+            df_sector = df_equity.groupby('Sector')['Market_Value_AUD'].sum().reset_index().sort_values('Market_Value_AUD', ascending=False)
+            fig3 = px.pie(df_sector, values='Market_Value_AUD', names='Sector', hole=0.4)
+            fig3.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig3, use_container_width=True)
+
+    with col_chart4:
+        st.subheader("⚔️ 戰略角色 (Strategy)")
+        if 'Strategy Role' in df_equity.columns:
+            df_strategy = df_equity.groupby('Strategy Role')['Market_Value_AUD'].sum().reset_index().sort_values('Market_Value_AUD', ascending=False)
+            fig4 = px.pie(df_strategy, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
+                         color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
+            fig4.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig4, use_container_width=True)
 
     # 跨平台運算
     ticker_values = df_updated.groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
@@ -226,8 +281,12 @@ if not df_raw.empty:
     view_mode = st.radio("顯示模式 (View Mode)", ["合併檢視 (Summary)", "詳細檢視 (Detailed)"], horizontal=True)
 
     if view_mode == "合併檢視 (Summary)":
+        # 1. 計算原幣別總成本 (Shares * Avg_Cost)
+        df_final['Native_Cost_Value'] = df_final['Shares'] * df_final['Avg_Cost']
+        
         summary_df = df_final.groupby('Ticker').agg({
             'Shares': 'sum',
+            'Native_Cost_Value': 'sum', # 用來算加權平均
             'Total_Cost_AUD': 'sum',
             'Market_Value_AUD': 'sum',
             'Unrealized_PnL': 'sum',
@@ -235,8 +294,14 @@ if not df_raw.empty:
             'Global_Drift_%': 'first',
             'Current_Price': 'mean'
         }).reset_index()
+        
+        # 2. 計算加權平均成本 = 總原幣成本 / 總股數
+        summary_df['Avg_Cost'] = summary_df['Native_Cost_Value'] / summary_df['Shares']
+        
         summary_df['Actual_%'] = summary_df['Market_Value_AUD'] / total_net_worth
-        display_cols = ['Ticker', 'Shares', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%']
+        
+        # 3. 把 Avg_Cost 加入顯示欄位
+        display_cols = ['Ticker', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%']
         display_df = summary_df[display_cols].copy()
     else:
         display_cols = ['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%', 'Stop_Loss_Price', 'Dist_to_Stop']
@@ -246,7 +311,7 @@ if not df_raw.empty:
     display_df = display_df.reset_index(drop=True)
     display_df.index = display_df.index + 1
 
-    # Total Row (無索引)
+    # Total Row
     t_row = {col: None for col in display_cols} 
     t_row['Ticker'] = 'TOTAL'
     t_row['Total_Cost_AUD'] = display_df['Total_Cost_AUD'].sum()
@@ -257,7 +322,7 @@ if not df_raw.empty:
     t_row['Total_Ticker_Target'] = unique_targets_sum
     
     total_df = pd.DataFrame([t_row])
-    total_df.index = [''] # 空白索引
+    total_df.index = [''] 
     
     display_df = pd.concat([display_df, total_df])
 
