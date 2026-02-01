@@ -54,30 +54,51 @@ def load_and_clean_data():
         return pd.DataFrame()
 
 def fetch_live_data(df):
-    # 取得股票代號 (排除 Cash)
-    tickers = df[df['Ticker'] != 'Cash']['Ticker'].unique().tolist()
-    tickers.append("AUDUSD=X") # 加入匯率
+    # 1. 取得股票代號 (排除 Cash)
+    tickers_list = df[df['Ticker'] != 'Cash']['Ticker'].unique().tolist()
     
-    # 下載數據
-    if tickers:
-        data = yf.download(tickers, period="1d", progress=False)['Close']
-        if isinstance(data, pd.Series): 
-            data = data.to_frame().T
-        latest_prices = data.iloc[-1]
-    else:
+    # 2. 清理代號 (移除空白)
+    tickers_list = [t.strip() for t in tickers_list]
+    
+    # 3. 加入匯率
+    if "AUDUSD=X" not in tickers_list:
+        tickers_list.append("AUDUSD=X")
+    
+    st.write(f"正在抓取以下代號: {tickers_list}") # 顯示除錯訊息，讓您知道它在抓什麼
+
+    # 4. 下載數據 (使用更寬鬆的設定)
+    try:
+        # 下載 2 天的數據以防時差導致抓不到今天的
+        data = yf.download(tickers_list, period="2d", group_by='ticker', auto_adjust=True)
+        
+        # 處理資料結構 (Yahoo 回傳格式有時會變)
+        if len(tickers_list) == 1:
+            # 如果只有一支股票，結構不同，統一轉成 DataFrame
+            latest_prices = data['Close'].iloc[-1]
+        else:
+            # 多支股票，取 'Close' 欄位的最後一行
+            # 注意：yfinance 新版回傳可能是 MultiIndex，需要小心處理
+            try:
+                latest_prices = data.xs('Close', level=1, axis=1).iloc[-1]
+            except:
+                # 舊版相容
+                latest_prices = data['Close'].iloc[-1]
+                
+    except Exception as e:
+        st.error(f"Yahoo Finance 下載失敗: {e}")
         latest_prices = pd.Series()
 
-    # 取得匯率 (預設 0.70 以防抓取失敗)
+    # 5. 取得匯率
     fx_rate = latest_prices.get('AUDUSD=X', 0.70)
     if pd.isna(fx_rate): fx_rate = 0.70
 
-    # 計算邏輯
+    # 6. 填入數據
     current_prices = []
     market_values_aud = []
     dist_to_stop = []
 
     for _, row in df.iterrows():
-        ticker = row['Ticker']
+        ticker = row['Ticker'].strip()
         currency = row['Currency']
         shares = row['Shares']
         cost = row['Avg_Cost']
@@ -85,32 +106,28 @@ def fetch_live_data(df):
         # --- A. 處理價格 ---
         if ticker == 'Cash':
             price = 1.0
-            # 現金匯率換算
-            if currency == 'USD':
-                mv = shares / fx_rate
-            else:
-                mv = shares
+            mv = shares / fx_rate if currency == 'USD' else shares
         else:
-            # 股票抓價
+            # 嘗試從下載的數據中找價格
             try:
-                # 嘗試抓價，抓不到就用成本價暫代
-                price = latest_prices.get(ticker, cost)
-                if pd.isna(price): price = cost
+                # 先找完全匹配的
+                price = latest_prices.get(ticker)
+                
+                # 如果找不到，且是 NaN，則使用成本價
+                if pd.isna(price):
+                    price = cost
             except:
                 price = cost
             
-            # 市值換算 (統一為 AUD)
-            if currency == 'USD':
-                mv = (price * shares) / fx_rate
-            else:
-                mv = price * shares
+            # 市值換算
+            mv = (price * shares) / fx_rate if currency == 'USD' else price * shares
 
-        # --- B. 計算停損距離 ---
+        # --- B. 計算停損 ---
         stop_price = row.get('Stop_Loss_Price', 0)
         if ticker != 'Cash' and stop_price > 0:
             dist = (price - stop_price) / price
         else:
-            dist = 1.0 # 安全值
+            dist = 1.0 
 
         current_prices.append(price)
         market_values_aud.append(mv)
@@ -222,3 +239,4 @@ if not df_raw.empty:
 else:
 
     st.info("⏳ 等待數據中... 請確認 Google Sheet 連結正確。")
+
