@@ -69,7 +69,7 @@ def fetch_live_data(df):
     # 4. 下載數據 (使用更寬鬆的設定)
     try:
         # 下載 2 天的數據以防時差導致抓不到今天的
-        data = yf.download(tickers_list, period="2d", group_by='ticker', auto_adjust=True)
+        data = yf.download(tickers_list, period="5d", group_by='ticker', auto_adjust=True)
         
         # 處理資料結構 (Yahoo 回傳格式有時會變)
         if len(tickers_list) == 1:
@@ -239,4 +239,5 @@ if not df_raw.empty:
 else:
 
     st.info("⏳ 等待數據中... 請確認 Google Sheet 連結正確。")
+
 
