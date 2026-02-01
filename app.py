@@ -174,6 +174,56 @@ if not df_raw.empty:
         st.subheader("⚔️ 戰略角色 (Strategy)")
         if 'Strategy Role' in df_equity.columns:
             fig2 = px.pie(df_equity, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
-                         color_discrete_map={'Core':'#00
+                         color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
+            st.plotly_chart(fig2, use_container_width=True)
 
+    # --- 持股明細與 Drift ---
+    st.subheader("📊 持股監控與再平衡")
 
+    # 計算 Drift
+    df_updated['Portfolio %'] = df_updated['Market_Value_AUD'] / total_net_worth
+    df_updated['Drift %'] = df_updated['Portfolio %'] - df_updated['Target_Weight']
+
+    # 選擇要顯示的欄位
+    cols_to_show = ['Ticker', 'Platform', 'Sector', 'Strategy Role', 'Shares', 'Avg_Cost', 'Current_Price', 'Stop_Loss_Price', 'Dist_to_Stop', 'Market_Value_AUD', 'Target_Weight', 'Drift %']
+    display_cols = [c for c in cols_to_show if c in df_updated.columns]
+    
+    display_df = df_updated[display_cols].copy()
+
+    # 樣式函數
+    def style_rows(row):
+        # 停損紅色警報
+        if row['Ticker'] != 'Cash' and row.get('Stop_Loss_Price', 0) > 0:
+            if row['Current_Price'] < row['Stop_Loss_Price']:
+                return ['background-color: #ffcccc; color: black'] * len(row)
+        return [''] * len(row)
+
+    st.dataframe(
+        display_df.style
+        .format({
+            'Market_Value_AUD': "${:,.0f}",
+            'Avg_Cost': "{:,.2f}",
+            'Current_Price': "{:,.2f}",
+            'Stop_Loss_Price': "{:,.2f}",
+            'Dist_to_Stop': "{:.1%}",
+            'Target_Weight': "{:.1%}",
+            'Drift %': "{:.2%}"
+        })
+        .apply(style_rows, axis=1)
+        .applymap(lambda x: 'color: green; font-weight: bold' if x > 0.005 else 'color: red; font-weight: bold' if x < -0.005 else '', subset=['Drift %'])
+    )
+
+    # --- 戰略行動建議 ---
+    st.markdown("### ⚡ 總司令行動建議 (Action Plan)")
+    
+    # 找出 Drift < -0.5% 的項目 (需要買進)
+    buy_list = df_updated[(df_updated['Drift %'] < -0.005) & (df_updated['Target_Weight'] > 0)]
+    
+    if not buy_list.empty:
+        for _, row in buy_list.iterrows():
+            shortfall = abs(row['Drift %']) * total_net_worth
+            st.info(f"🟢 **買進訊號 ({row['Ticker']})**: 低於目標 {abs(row['Drift %']):.1%}。建議加碼約 **${shortfall:,.0f} AUD**。")
+    else:
+        st.success("✅ 目前投資組合平衡完美，無須重大操作。")
+else:
+    st.info("⏳ 等待數據中... 請確認 Google Sheet 連結正確。")
