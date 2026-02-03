@@ -168,12 +168,12 @@ with st.container():
         st.subheader("Asset Allocation")
         df_pie = get_clean_pie_df(df)
         fig1 = px.pie(df_pie, values='MV_AUD', names='Ticker', hole=0.5,
-                      color_discrete_sequence=px.colors.sequential.Slate_r)
+                      color_discrete_sequence=LUXURY_COLORS) # 🟢 修改這裡：改用我們定義的 LUXURY_COLORS
         fig1.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=450, showlegend=False)
         fig1.update_traces(textinfo='label+percent', textposition='outside')
         st.plotly_chart(fig1, use_container_width=True)
 
-    with c2:
+   with c2:
         st.subheader("Strategy Distribution")
         df_strat = df[df['Ticker'] != 'Cash'].groupby('Strategy Role')['MV_AUD'].sum().reset_index()
         fig2 = px.pie(df_strat, values='MV_AUD', names='Strategy Role', hole=0.5,
@@ -229,3 +229,4 @@ st.markdown("<br>", unsafe_allow_html=True)
 if st.button('🔄 Sync Portfolio'):
     st.cache_data.clear()
     st.rerun()
+
