@@ -154,25 +154,53 @@ with st.container():
 
 st.markdown("---")
 
-# --- 表格區 ---
+# --- 表格區 (Updated with Total Cost) ---
 view = st.radio("View Mode", ["Summary", "Detailed"], horizontal=True, label_visibility="collapsed")
 
+# Pre-calculate Cost_AUD for the summary group
+df['Cost_AUD_Val'] = df['Cost_AUD'] 
+
 if view == "Summary":
-    df['Original_Cost_Val'] = df['Shares'] * df['Avg_Cost']
     df_disp = df.groupby('Ticker').agg({
         'Shares': 'sum',
-        'Original_Cost_Val': 'sum',
+        'Avg_Cost': 'mean', # This is an average of averages
+        'Cost_AUD_Val': 'sum',
         'Current_Price': 'mean',
         'MV_AUD': 'sum',
         'PnL_AUD': 'sum'
     }).reset_index()
-    df_disp['Avg_Cost'] = df_disp['Original_Cost_Val'] / df_disp['Shares']
-    df_disp = df_disp[['Ticker', 'Shares', 'Avg_Cost', 'Current_Price', 'MV_AUD', 'PnL_AUD']]
+    # Rename column for clarity
+    df_disp = df_disp.rename(columns={'Cost_AUD_Val': 'Total_Cost_AUD'})
+    df_disp = df_disp[['Ticker', 'Shares', 'Avg_Cost', 'Total_Cost_AUD', 'Current_Price', 'MV_AUD', 'PnL_AUD']]
 else:
-    df_disp = df[['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'MV_AUD', 'PnL_AUD', 'Stop_Loss_Price']]
+    df_disp = df[['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Cost_AUD', 'Current_Price', 'MV_AUD', 'PnL_AUD', 'Stop_Loss_Price']]
+    df_disp = df_disp.rename(columns={'Cost_AUD': 'Total_Cost_AUD'})
 
 df_disp = df_disp.sort_values('MV_AUD', ascending=False).reset_index(drop=True)
 df_disp.index += 1
+
+# 添加 TOTAL Row (Ensure it matches the column structure)
+total_row_data = {
+    'Ticker': ['TOTAL'], 
+    'Total_Cost_AUD': [df_disp['Total_Cost_AUD'].sum()],
+    'MV_AUD': [df_disp['MV_AUD'].sum()], 
+    'PnL_AUD': [df_disp['PnL_AUD'].sum()]
+}
+total_row = pd.DataFrame(total_row_data, index=[' '])
+df_final = pd.concat([df_disp, total_row])
+
+# Display Table
+st.dataframe(
+    df_final.style.format({
+        'Current_Price': "{:.2f}", 
+        'Avg_Cost': "{:.2f}",
+        'Total_Cost_AUD': "${:,.0f}",
+        'MV_AUD': "${:,.0f}", 
+        'PnL_AUD': "${:,.0f}"
+    }, na_rep="-")
+    .apply(lambda x: ['font-weight: bold; background-color: #fafafa' if x.Ticker == 'TOTAL' else '' for i in x], axis=1),
+    use_container_width=True
+)
 
 # 添加 TOTAL Row
 total_row = pd.DataFrame({'Ticker': ['TOTAL'], 'MV_AUD': [df_disp['MV_AUD'].sum()], 'PnL_AUD': [df_disp['PnL_AUD'].sum()]}, index=[' '])
@@ -188,3 +216,4 @@ st.markdown("<br>", unsafe_allow_html=True)
 if st.button('🔄 Sync Portfolio'):
     st.cache_data.clear()
     st.rerun()
+
