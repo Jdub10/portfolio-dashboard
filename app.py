@@ -2,33 +2,83 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
+import plotly.graph_objects as go
 
 # --- 1. 頁面設定 (必須放在第一行) ---
-st.set_page_config(page_title="James' Commander Dashboard", layout="wide")
+st.set_page_config(page_title="James' Portfolio", layout="wide", page_icon="💎")
+
+# ==========================================
+# 🎨 CSS 高級視覺優化 (High Class Styling)
+# ==========================================
+st.markdown("""
+<style>
+    /* 全局字體設定 */
+    html, body, [class*="css"] {
+        font-family: 'Helvetica Neue', 'Arial', sans-serif;
+        font-weight: 300;
+    }
+    
+    /* 頂部留白調整 */
+    .block-container {
+        padding-top: 3rem;
+        padding-bottom: 5rem;
+    }
+
+    /* KPI 卡片樣式 */
+    div[data-testid="stMetric"] {
+        background-color: #f8f9fa; /* 淺灰背景 */
+        padding: 15px 20px;
+        border-radius: 12px;
+        border: 1px solid #e9ecef;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.02); /* 極淡的陰影 */
+        transition: transform 0.2s;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px); /* 滑鼠懸停微浮效果 */
+        box-shadow: 0 6px 12px rgba(0,0,0,0.05);
+    }
+    
+    /* 標題樣式 */
+    h1 {
+        font-weight: 600 !important;
+        color: #1a1a1a;
+        letter-spacing: -1px;
+    }
+    h3 {
+        font-weight: 500 !important;
+        color: #4a4a4a;
+        margin-top: 20px !important;
+    }
+
+    /* 表格樣式優化 */
+    .dataframe {
+        font-size: 14px !important;
+        font-family: 'Roboto Mono', monospace;
+    }
+    
+    /* 去除一些雜訊 */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 🔐 密碼保護功能
 # ==========================================
 def check_password():
     """Returns `True` if the user had the correct password."""
-
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == st.secrets["PASSWORD"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        st.text_input(
-            "請輸入通關密碼 (Password):", type="password", on_change=password_entered, key="password"
-        )
+        st.text_input("PASSWORD", type="password", on_change=password_entered, key="password", placeholder="Enter access code")
         return False
     elif not st.session_state["password_correct"]:
-        st.text_input(
-            "密碼錯誤，請重試:", type="password", on_change=password_entered, key="password"
-        )
+        st.text_input("ACCESS DENIED", type="password", on_change=password_entered, key="password", placeholder="Try again")
         return False
     else:
         return True
@@ -42,6 +92,10 @@ if not check_password():
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/14IGIMj9iR5qOtmYT1e6FgN8t2tdQ5M1R_-hS6rw1RQs/export?format=csv"
 
+# 定義高級配色盤 (High Class Palette)
+# 深藍、 slate、 灰藍、 金色點綴
+LUXURY_COLORS = ['#2E4053', '#5D6D7E', '#85929E', '#AED6F1', '#F5B041', '#EC7063', '#48C9B0', '#AF7AC5']
+
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
@@ -51,7 +105,7 @@ def load_and_clean_data():
         required_cols = ['Shares', 'Avg_Cost', 'Target_Weight']
         for col in required_cols:
             if col not in df.columns:
-                st.error(f"❌ 資料表缺少欄位: {col}")
+                st.error(f"❌ Missing Column: {col}")
                 return pd.DataFrame()
 
         cols_to_clean = ['Shares', 'Avg_Cost', 'Stop_Loss_Price']
@@ -69,7 +123,7 @@ def load_and_clean_data():
         
         return df
     except Exception as e:
-        st.error(f"❌ 無法讀取資料: {e}")
+        st.error(f"Data Error: {e}")
         return pd.DataFrame()
 
 def fetch_live_data(df):
@@ -83,7 +137,7 @@ def fetch_live_data(df):
         data = yf.download(tickers_list, period="5d", progress=False)
         
         if data.empty:
-            st.error("❌ Yahoo Finance 回傳空資料！")
+            st.error("Connection Error: No data received.")
             latest_prices = pd.Series()
         else:
             if 'Close' in data.columns:
@@ -93,7 +147,7 @@ def fetch_live_data(df):
                 latest_prices = data.iloc[-1]
                 
     except Exception as e:
-        st.error(f"Yahoo Finance 下載失敗: {e}")
+        st.error(f"API Error: {e}")
         latest_prices = pd.Series()
 
     fx_rate = latest_prices.get('AUDUSD=X', 0.70)
@@ -147,7 +201,6 @@ def fetch_live_data(df):
     
     return df, fx_rate
 
-# --- 🛠️ 圓餅圖優化函數 ---
 def group_small_holdings(df, value_col='Market_Value_AUD', name_col='Ticker', threshold=0.80):
     df = df.sort_values(value_col, ascending=False)
     total_val = df[value_col].sum()
@@ -172,7 +225,7 @@ def group_small_holdings(df, value_col='Market_Value_AUD', name_col='Ticker', th
         others_val = sum(r[value_col] for r in other_rows)
         others_names = [r[name_col] for r in other_rows]
         if len(others_names) > 3:
-            names_str = ", ".join(others_names[:3]) + " etc"
+            names_str = ", ".join(others_names[:3]) + "..."
         else:
             names_str = ", ".join(others_names)
         label = f"Others ({names_str})"
@@ -183,10 +236,31 @@ def group_small_holdings(df, value_col='Market_Value_AUD', name_col='Ticker', th
     else:
         return df_main
 
-# --- 主介面 ---
-st.title("🚀 James' Commander Dashboard")
+# --- 🎨 高級圖表繪製函數 ---
+def plot_luxury_pie(df, values, names, title):
+    fig = px.pie(df, values=values, names=names, hole=0.6, # 甜甜圈洞大一點比較時尚
+                 color_discrete_sequence=LUXURY_COLORS) 
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=18, color="#333"), x=0.5, xanchor='center'),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5), # 圖例放下
+        margin=dict(t=50, b=50, l=20, r=20),
+        paper_bgcolor='rgba(0,0,0,0)', # 透明背景
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="Helvetica Neue", size=13)
+    )
+    fig.update_traces(
+        textposition='outside', 
+        textinfo='percent+label',
+        marker=dict(line=dict(color='#FFFFFF', width=2)) # 白色邊框讓切片分離
+    )
+    return fig
 
-if st.button('🔄 Refresh Data'):
+# --- 主介面 ---
+st.title("Portfolio Overview") # 簡潔標題
+
+if st.button('Refresh Data', type="primary"): # 使用 Primary 樣式按鈕
     st.cache_data.clear()
 
 df_raw = load_and_clean_data()
@@ -200,68 +274,74 @@ if not df_raw.empty:
     else:
         CAPITAL_INJECTED = 743564 
 
-    with st.spinner('連線報價伺服器中...'):
+    with st.spinner('Updating Market Data...'):
         df_updated, fx_rate = fetch_live_data(df_raw)
 
     total_net_worth = df_updated['Market_Value_AUD'].sum()
     unrealized_pnl = total_net_worth - CAPITAL_INJECTED
     pnl_pct = (unrealized_pnl / CAPITAL_INJECTED) * 100 if CAPITAL_INJECTED > 0 else 0
 
+    # KPI 區塊
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("總資產 (AUD)", f"${total_net_worth:,.0f}")
-    col2.metric("總投入本金", f"${CAPITAL_INJECTED:,.0f}")
-    col3.metric("總未實現損益", f"${unrealized_pnl:,.0f}", f"{pnl_pct:.2f}%", 
-                delta_color="normal" if unrealized_pnl > 0 else "inverse")
-    col4.metric("即時匯率", f"{fx_rate:.4f}")
+    col1.metric("Net Worth (AUD)", f"${total_net_worth:,.0f}")
+    col2.metric("Capital Injected", f"${CAPITAL_INJECTED:,.0f}")
+    col3.metric("Unrealized PnL", f"${unrealized_pnl:,.0f}", f"{pnl_pct:.2f}%")
+    col4.metric("FX Rate (AUD/USD)", f"{fx_rate:.4f}")
 
     st.markdown("---")
 
     # ==========================================
-    # 📊 第一排圖表：資金分佈
+    # 📊 第一排圖表：資金分佈 (Luxury)
     # ==========================================
     col_chart1, col_chart2 = st.columns(2)
     
     with col_chart1:
-        st.subheader("💰 資產配置 (含現金)")
+        st.subheader("Asset Allocation (Incl. Cash)")
         df_incl_cash = df_updated.groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
-        df_incl_cash_optimized = group_small_holdings(df_incl_cash, threshold=0.80)
-        fig1 = px.pie(df_incl_cash_optimized, values='Market_Value_AUD', names='Ticker', hole=0.4,
-                      title=f"Total: ${total_net_worth:,.0f}")
-        fig1.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig1, use_container_width=True)
+        df_incl_cash_opt = group_small_holdings(df_incl_cash, threshold=0.80)
+        
+        fig1 = plot_luxury_pie(df_incl_cash_opt, 'Market_Value_AUD', 'Ticker', f"Total: ${total_net_worth:,.0f}")
+        st.plotly_chart(fig1, use_container_width=True, height=550)
 
     with col_chart2:
-        st.subheader("📈 持股分佈 (不含現金)")
+        st.subheader("Equity Allocation (Excl. Cash)")
         df_excl_cash = df_updated[df_updated['Ticker'] != 'Cash'].groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
-        df_excl_cash_optimized = group_small_holdings(df_excl_cash, threshold=0.80)
+        df_excl_cash_opt = group_small_holdings(df_excl_cash, threshold=0.80)
         equity_total = df_excl_cash['Market_Value_AUD'].sum()
-        fig2 = px.pie(df_excl_cash_optimized, values='Market_Value_AUD', names='Ticker', hole=0.4,
-                      title=f"Equity: ${equity_total:,.0f}")
-        fig2.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig2, use_container_width=True)
+        
+        fig2 = plot_luxury_pie(df_excl_cash_opt, 'Market_Value_AUD', 'Ticker', f"Equity: ${equity_total:,.0f}")
+        st.plotly_chart(fig2, use_container_width=True, height=550)
 
     # ==========================================
-    # 📊 第二排圖表：戰略配置
+    # 📊 第二排圖表：戰略配置 (Luxury)
     # ==========================================
     col_chart3, col_chart4 = st.columns(2)
     df_equity = df_updated[df_updated['Ticker'] != 'Cash'] 
     
     with col_chart3:
-        st.subheader("🍰 板塊配置 (Sector)")
+        st.subheader("Sector Exposure")
         if 'Sector' in df_equity.columns:
             df_sector = df_equity.groupby('Sector')['Market_Value_AUD'].sum().reset_index().sort_values('Market_Value_AUD', ascending=False)
-            fig3 = px.pie(df_sector, values='Market_Value_AUD', names='Sector', hole=0.4)
-            fig3.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig3, use_container_width=True)
+            fig3 = plot_luxury_pie(df_sector, 'Market_Value_AUD', 'Sector', "By Sector")
+            st.plotly_chart(fig3, use_container_width=True, height=550)
 
     with col_chart4:
-        st.subheader("⚔️ 戰略角色 (Strategy)")
+        st.subheader("Strategy Roles")
         if 'Strategy Role' in df_equity.columns:
             df_strategy = df_equity.groupby('Strategy Role')['Market_Value_AUD'].sum().reset_index().sort_values('Market_Value_AUD', ascending=False)
-            fig4 = px.pie(df_strategy, values='Market_Value_AUD', names='Strategy Role', hole=0.4,
-                         color_discrete_map={'Core':'#00cc96', 'Satellite':'#636efa', 'Speculative':'#EF553B'})
-            fig4.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig4, use_container_width=True)
+            # 戰略角色可以用特定的顏色，讓它更直觀
+            fig4 = px.pie(df_strategy, values='Market_Value_AUD', names='Strategy Role', hole=0.6,
+                         color_discrete_map={'Core':'#2E4053', 'Satellite':'#5D6D7E', 'Speculative':'#EC7063'})
+            fig4.update_layout(
+                title=dict(text="By Role", font=dict(size=18), x=0.5, xanchor='center'),
+                showlegend=True,
+                legend=dict(orientation="h", y=-0.2, x=0.5, xanchor='center'),
+                margin=dict(t=50, b=50, l=20, r=20),
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(family="Helvetica Neue", size=13)
+            )
+            fig4.update_traces(textposition='outside', textinfo='percent+label', marker=dict(line=dict(color='#FFFFFF', width=2)))
+            st.plotly_chart(fig4, use_container_width=True, height=550)
 
     # 跨平台運算
     ticker_values = df_updated.groupby('Ticker')['Market_Value_AUD'].sum().reset_index()
@@ -278,15 +358,15 @@ if not df_raw.empty:
     df_final['Actual_%'] = df_final['Market_Value_AUD'] / total_net_worth
 
     # 切換檢視
-    view_mode = st.radio("顯示模式 (View Mode)", ["合併檢視 (Summary)", "詳細檢視 (Detailed)"], horizontal=True)
+    st.subheader("Holdings Detail")
+    view_mode = st.radio("", ["Summary View", "Detailed View"], horizontal=True, label_visibility="collapsed") # 隱藏標籤，更簡潔
 
-    if view_mode == "合併檢視 (Summary)":
-        # 1. 計算原幣別總成本 (Shares * Avg_Cost)
+    if view_mode == "Summary View":
         df_final['Native_Cost_Value'] = df_final['Shares'] * df_final['Avg_Cost']
         
         summary_df = df_final.groupby('Ticker').agg({
             'Shares': 'sum',
-            'Native_Cost_Value': 'sum', # 用來算加權平均
+            'Native_Cost_Value': 'sum', 
             'Total_Cost_AUD': 'sum',
             'Market_Value_AUD': 'sum',
             'Unrealized_PnL': 'sum',
@@ -295,12 +375,9 @@ if not df_raw.empty:
             'Current_Price': 'mean'
         }).reset_index()
         
-        # 2. 計算加權平均成本 = 總原幣成本 / 總股數
         summary_df['Avg_Cost'] = summary_df['Native_Cost_Value'] / summary_df['Shares']
-        
         summary_df['Actual_%'] = summary_df['Market_Value_AUD'] / total_net_worth
         
-        # 3. 把 Avg_Cost 加入顯示欄位
         display_cols = ['Ticker', 'Shares', 'Avg_Cost', 'Current_Price', 'Total_Cost_AUD', 'Market_Value_AUD', 'Unrealized_PnL', 'Actual_%', 'Total_Ticker_Target', 'Global_Drift_%']
         display_df = summary_df[display_cols].copy()
     else:
@@ -326,40 +403,39 @@ if not df_raw.empty:
     
     display_df = pd.concat([display_df, total_df])
 
-    # 樣式設定
+    # 樣式設定 (極簡風)
     def style_dataframe(row):
         styles = [''] * len(row)
         if row['Ticker'] == 'TOTAL':
-            return ['font-weight: bold; background-color: #f0f2f6'] * len(row)
+            return ['font-weight: bold; background-color: #f0f2f6; border-top: 2px solid #ccc'] * len(row)
         
         if 'Stop_Loss_Price' in row and row['Ticker'] != 'Cash' and row['Ticker'] != 'TOTAL':
             try:
                 stop = float(row['Stop_Loss_Price'])
                 curr = float(row['Current_Price'])
                 if stop > 0 and curr < stop:
-                    return ['background-color: #ffcccc; color: black'] * len(row)
+                    # 改用更優雅的淡紅色背景
+                    return ['background-color: #fff5f5; color: #c0392b; font-weight: 500'] * len(row)
             except:
                 pass
         return styles
 
     def color_drift(val):
         if isinstance(val, (int, float)):
-            if val > 0.005: return 'color: green; font-weight: bold'
-            if val < -0.005: return 'color: red; font-weight: bold'
+            if val > 0.005: return 'color: #27ae60; font-weight: bold' # 翡翠綠
+            if val < -0.005: return 'color: #c0392b; font-weight: bold' # 寶石紅
         return ''
 
     def color_pnl(val):
         if isinstance(val, (int, float)):
-            return 'color: green' if val > 0 else 'color: red'
+            return 'color: #27ae60' if val > 0 else 'color: #c0392b'
         return ''
     
     def color_dist(val):
         if isinstance(val, (int, float)):
-            if 0 < val < 0.05: return 'color: orange; font-weight: bold'
+            if 0 < val < 0.05: return 'color: #d35400; font-weight: bold' # 焦糖橘
         return ''
 
-    st.subheader(f"📊 {view_mode}")
-    
     st.dataframe(
         display_df.style
         .format({
@@ -380,14 +456,15 @@ if not df_raw.empty:
         .applymap(color_dist, subset=['Dist_to_Stop'] if 'Dist_to_Stop' in display_df.columns else None)
     )
 
-    st.markdown("### ⚡ 總司令行動建議")
+    # 行動建議 (使用簡潔的卡片)
+    st.markdown("### Action Plan")
     action_tickers = ticker_stats[ticker_stats['Global_Drift_%'] < -0.005]
     if not action_tickers.empty:
         for _, row in action_tickers.iterrows():
             shortfall = abs(row['Global_Drift_%']) * total_net_worth
-            st.info(f"🟢 **加碼訊號 ({row['Ticker']})**: 需補足 **${shortfall:,.0f} AUD**。")
+            st.info(f"🔹 **Buy {row['Ticker']}**: Add approx. **${shortfall:,.0f} AUD** to reach target.")
     else:
-        st.success("✅ 投資組合平衡完美。")
+        st.success("✨ Portfolio is perfectly balanced.")
 
 else:
-    st.info("⏳ 等待數據中...")
+    st.info("⏳ Waiting for data connection...")
