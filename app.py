@@ -154,51 +154,61 @@ with st.container():
 
 st.markdown("---")
 
-# --- 表格區 (Updated with Total Cost) ---
+# --- 表格區 (Consolidated & Fixed) ---
 view = st.radio("View Mode", ["Summary", "Detailed"], horizontal=True, label_visibility="collapsed")
 
-# Pre-calculate Cost_AUD for the summary group
-df['Cost_AUD_Val'] = df['Cost_AUD'] 
+# 1. Prepare base data
+df['Cost_AUD_Val'] = df['Cost_AUD']
 
 if view == "Summary":
     df_disp = df.groupby('Ticker').agg({
         'Shares': 'sum',
-        'Avg_Cost': 'mean', # This is an average of averages
+        'Avg_Cost': 'mean', 
         'Cost_AUD_Val': 'sum',
         'Current_Price': 'mean',
         'MV_AUD': 'sum',
         'PnL_AUD': 'sum'
     }).reset_index()
-    # Rename column for clarity
     df_disp = df_disp.rename(columns={'Cost_AUD_Val': 'Total_Cost_AUD'})
-    df_disp = df_disp[['Ticker', 'Shares', 'Avg_Cost', 'Total_Cost_AUD', 'Current_Price', 'MV_AUD', 'PnL_AUD']]
 else:
-    df_disp = df[['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Cost_AUD', 'Current_Price', 'MV_AUD', 'PnL_AUD', 'Stop_Loss_Price']]
+    df_disp = df[['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Cost_AUD', 'Current_Price', 'MV_AUD', 'PnL_AUD', 'Stop_Loss_Price']].copy()
     df_disp = df_disp.rename(columns={'Cost_AUD': 'Total_Cost_AUD'})
 
+# 2. Calculate PnL % for each row
+df_disp['PnL_%'] = (df_disp['PnL_AUD'] / df_disp['Total_Cost_AUD'] * 100).fillna(0)
+
+# 3. Sort and clean index
 df_disp = df_disp.sort_values('MV_AUD', ascending=False).reset_index(drop=True)
 df_disp.index += 1
 
-# 添加 TOTAL Row (Ensure it matches the column structure)
-total_row_data = {
+# 4. Create TOTAL row
+total_row = pd.DataFrame({
     'Ticker': ['TOTAL'], 
     'Total_Cost_AUD': [df_disp['Total_Cost_AUD'].sum()],
     'MV_AUD': [df_disp['MV_AUD'].sum()], 
     'PnL_AUD': [df_disp['PnL_AUD'].sum()]
-}
-total_row = pd.DataFrame(total_row_data, index=[' '])
+}, index=[' '])
+
+# Calculate Total PnL %
+if total_row['Total_Cost_AUD'].iloc[0] != 0:
+    total_row['PnL_%'] = (total_row['PnL_AUD'] / total_row['Total_Cost_AUD'] * 100)
+else:
+    total_row['PnL_%'] = 0
+
+# 5. Final Concat
 df_final = pd.concat([df_disp, total_row])
 
-# Display Table
+# 6. Single Render Call
 st.dataframe(
     df_final.style.format({
         'Current_Price': "{:.2f}", 
         'Avg_Cost': "{:.2f}",
         'Total_Cost_AUD': "${:,.0f}",
         'MV_AUD': "${:,.0f}", 
-        'PnL_AUD': "${:,.0f}"
+        'PnL_AUD': "${:,.0f}",
+        'PnL_%': "{:.2f}%"
     }, na_rep="-")
-    .apply(lambda x: ['font-weight: bold; background-color: #fafafa' if x.Ticker == 'TOTAL' else '' for i in x], axis=1),
+    .apply(lambda x: ['font-weight: bold; background-color: #f0f2f6' if x.Ticker == 'TOTAL' else '' for i in x], axis=1),
     use_container_width=True
 )
 
@@ -216,4 +226,5 @@ st.markdown("<br>", unsafe_allow_html=True)
 if st.button('🔄 Sync Portfolio'):
     st.cache_data.clear()
     st.rerun()
+
 
