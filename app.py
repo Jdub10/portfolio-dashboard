@@ -50,7 +50,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 🛰️ 資料與色彩中心 ---
+# --- 🛰️ 資料處理中心 ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/14IGIMj9iR5qOtmYT1e6FgN8t2tdQ5M1R_-hS6rw1RQs/export?format=csv"
 LUXURY_COLORS = ['#2E4053', '#5D6D7E', '#85929E', '#AED6F1', '#F5B041', '#EC7063', '#48C9B0', '#AF7AC5']
 
@@ -92,7 +92,7 @@ def get_clean_pie_df(df, threshold=0.85):
         return pd.concat([main, other_row])
     return main
 
-# --- 🚀 執行與介面 ---
+# --- 🚀 執行 ---
 df_raw = load_data()
 capital_row = df_raw[df_raw['Ticker'] == 'CAPITAL']
 CAPITAL = capital_row['Shares'].sum() if not capital_row.empty else 743564
@@ -115,7 +115,7 @@ m4.metric("FX Rate", f"{fx:.4f}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- 圖表區 (No Overlap Layout) ---
+# --- 圖表區 ---
 with st.container():
     c1, c2 = st.columns(2)
     with c1:
@@ -134,91 +134,64 @@ with st.container():
         fig2.update_traces(textinfo='percent', textposition='inside')
         st.plotly_chart(fig2, use_container_width=True)
 
-with st.container():
-    c3, c4 = st.columns(2)
-    with c3:
-        st.subheader("Sector Exposure")
-        if 'Sector' in df.columns:
-            df_sec = df[df['Ticker'] != 'Cash'].groupby('Sector')['MV_AUD'].sum().reset_index()
-            fig3 = px.pie(df_sec, values='MV_AUD', names='Sector', hole=0.5, color_discrete_sequence=LUXURY_COLORS)
-            fig3.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=450, showlegend=True, legend=dict(orientation="h", y=-0.1))
-            st.plotly_chart(fig3, use_container_width=True)
-    with c4:
-        st.subheader("Strategy Role")
-        if 'Strategy Role' in df.columns:
-            df_strat = df[df['Ticker'] != 'Cash'].groupby('Strategy Role')['MV_AUD'].sum().reset_index()
-            fig4 = px.pie(df_strat, values='MV_AUD', names='Strategy Role', hole=0.5, 
-                          color_discrete_map={'Core':'#2E4053', 'Satellite':'#5D6D7E', 'Speculative':'#EC7063'})
-            fig4.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=450, showlegend=True, legend=dict(orientation="h", y=-0.1))
-            st.plotly_chart(fig4, use_container_width=True)
-
 st.markdown("---")
 
-# --- 表格區 (Consolidated & Fixed) ---
+# --- 表格區 (Optimized & Single Table) ---
 view = st.radio("View Mode", ["Summary", "Detailed"], horizontal=True, label_visibility="collapsed")
 
-# 1. Prepare base data
-df['Cost_AUD_Val'] = df['Cost_AUD']
+# 1. 準備基礎數據
+df['Native_Cost_Total'] = df['Shares'] * df['Avg_Cost']
 
 if view == "Summary":
     df_disp = df.groupby('Ticker').agg({
         'Shares': 'sum',
-        'Avg_Cost': 'mean', 
-        'Cost_AUD_Val': 'sum',
+        'Native_Cost_Total': 'sum',
         'Current_Price': 'mean',
+        'Cost_AUD': 'sum',
         'MV_AUD': 'sum',
         'PnL_AUD': 'sum'
     }).reset_index()
-    df_disp = df_disp.rename(columns={'Cost_AUD_Val': 'Total_Cost_AUD'})
+    # 計算加權平均成本
+    df_disp['Avg_Cost'] = df_disp['Native_Cost_Total'] / df_disp['Shares']
+    df_disp = df_disp[['Ticker', 'Shares', 'Avg_Cost', 'Current_Price', 'Cost_AUD', 'MV_AUD', 'PnL_AUD']]
 else:
-    df_disp = df[['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Cost_AUD', 'Current_Price', 'MV_AUD', 'PnL_AUD', 'Stop_Loss_Price']].copy()
-    df_disp = df_disp.rename(columns={'Cost_AUD': 'Total_Cost_AUD'})
+    df_disp = df[['Ticker', 'Platform', 'Shares', 'Avg_Cost', 'Current_Price', 'Cost_AUD', 'MV_AUD', 'PnL_AUD', 'Stop_Loss_Price']].copy()
 
-# 2. Calculate PnL % for each row
-df_disp['PnL_%'] = (df_disp['PnL_AUD'] / df_disp['Total_Cost_AUD'] * 100).fillna(0)
+# 2. 計算 PnL %
+df_disp['PnL_%'] = (df_disp['PnL_AUD'] / df_disp['Cost_AUD'] * 100).fillna(0)
 
-# 3. Sort and clean index
+# 3. 排序與索引
 df_disp = df_disp.sort_values('MV_AUD', ascending=False).reset_index(drop=True)
 df_disp.index += 1
 
-# 4. Create TOTAL row
+# 4. 製作 TOTAL 行
 total_row = pd.DataFrame({
-    'Ticker': ['TOTAL'], 
-    'Total_Cost_AUD': [df_disp['Total_Cost_AUD'].sum()],
-    'MV_AUD': [df_disp['MV_AUD'].sum()], 
+    'Ticker': ['TOTAL'],
+    'Shares': [None],
+    'Cost_AUD': [df_disp['Cost_AUD'].sum()],
+    'MV_AUD': [df_disp['MV_AUD'].sum()],
     'PnL_AUD': [df_disp['PnL_AUD'].sum()]
 }, index=[' '])
 
-# Calculate Total PnL %
-if total_row['Total_Cost_AUD'].iloc[0] != 0:
-    total_row['PnL_%'] = (total_row['PnL_AUD'] / total_row['Total_Cost_AUD'] * 100)
-else:
-    total_row['PnL_%'] = 0
+# 計算總體 PnL %
+if total_row['Cost_AUD'].iloc[0] != 0:
+    total_row['PnL_%'] = (total_row['PnL_AUD'] / total_row['Cost_AUD'] * 100)
 
-# 5. Final Concat
+# 5. 合併顯示
 df_final = pd.concat([df_disp, total_row])
 
-# 6. Single Render Call
+# 6. 單一表格渲染 (Luxury Style)
 st.dataframe(
     df_final.style.format({
-        'Current_Price': "{:.2f}", 
         'Avg_Cost': "{:.2f}",
-        'Total_Cost_AUD': "${:,.0f}",
-        'MV_AUD': "${:,.0f}", 
+        'Current_Price': "{:.2f}",
+        'Cost_AUD': "${:,.0f}",
+        'MV_AUD': "${:,.0f}",
         'PnL_AUD': "${:,.0f}",
-        'PnL_%': "{:.2f}%"
+        'PnL_%': "{:.2f}%",
+        'Stop_Loss_Price': "{:.2f}"
     }, na_rep="-")
-    .apply(lambda x: ['font-weight: bold; background-color: #f0f2f6' if x.Ticker == 'TOTAL' else '' for i in x], axis=1),
-    use_container_width=True
-)
-
-# 添加 TOTAL Row
-total_row = pd.DataFrame({'Ticker': ['TOTAL'], 'MV_AUD': [df_disp['MV_AUD'].sum()], 'PnL_AUD': [df_disp['PnL_AUD'].sum()]}, index=[' '])
-df_final = pd.concat([df_disp, total_df if 'total_df' in locals() else total_row])
-
-st.dataframe(
-    df_final.style.format({'Current_Price': "{:.2f}", 'MV_AUD': "${:,.0f}", 'PnL_AUD': "${:,.0f}", 'Avg_Cost': "{:.2f}"}, na_rep="-")
-    .apply(lambda x: ['font-weight: bold; background-color: #fafafa' if x.name == 'TOTAL' or x.Ticker == 'TOTAL' else '' for i in x], axis=1),
+    .apply(lambda x: ['font-weight: bold; background-color: #f8f9fa' if x.Ticker == 'TOTAL' else '' for i in x], axis=1),
     use_container_width=True
 )
 
@@ -226,5 +199,3 @@ st.markdown("<br>", unsafe_allow_html=True)
 if st.button('🔄 Sync Portfolio'):
     st.cache_data.clear()
     st.rerun()
-
-
